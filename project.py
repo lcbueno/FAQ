@@ -3,14 +3,12 @@
 import os
 import docx2txt
 import streamlit as st
-import torch
-
-from dotenv import load_dotenv  
-load_dotenv()                   
+import torch                  
 
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.llms.openai import OpenAI
 from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, Settings
+
 
 
 # Fixes compatibility between Streamlit and PyTorch
