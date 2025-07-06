@@ -63,7 +63,7 @@ def buscar_contexto(pergunta: str, index, trechos, referencias, k=3):
     return resultados
 
 # Gera resposta com base nos trechos
-def gerar_resposta(pergunta: str, contexto: List[str]):
+def gerar_resposta(pergunta: str, contexto: List[tuple]):
     prompt = f"""
 Você é um assistente de atendimento ao cliente. Use as informações abaixo para responder de forma objetiva, amigável e precisa:
 
@@ -110,10 +110,20 @@ for msg in st.session_state.mensagens:
 # Processa nova pergunta
 if pergunta:
     st.chat_message("user").markdown(pergunta)
+
     contexto = buscar_contexto(pergunta, index, trechos, refs)
     resposta = gerar_resposta(pergunta, contexto)
 
-    st.chat_message("assistant").markdown(resposta)
+    # Exibe resposta e fontes
+    with st.chat_message("assistant"):
+        st.markdown(resposta)
 
+        fontes_usadas = set([fonte for fonte, _ in contexto])
+        if fontes_usadas:
+            st.markdown("**Fontes consultadas:**")
+            for fonte in fontes_usadas:
+                st.markdown(f"- 📄 `{fonte}`")
+
+    # Salva no histórico
     st.session_state.mensagens.append({"role": "user", "content": pergunta})
     st.session_state.mensagens.append({"role": "assistant", "content": resposta})
