@@ -10,69 +10,69 @@ from typing import List, Tuple
 from openai import OpenAI
 from sklearn.metrics.pairwise import cosine_similarity
 
-# Configuração da OpenAI
+# OpenAI Configuration
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 EMBEDDING_MODEL = "text-embedding-ada-002"
 CHAT_MODEL = "gpt-4"
 
-# Lê documentos .docx
-@st.cache_data(show_spinner="Extraindo textos dos documentos...")
-def carregar_textos():
-    documentos = []
-    pasta = "support"
-    for arquivo in os.listdir(pasta):
-        if arquivo.endswith(".docx"):
-            texto = docx2txt.process(os.path.join(pasta, arquivo))
-            documentos.append((arquivo, texto.strip()))
-    return documentos
+# Load .docx documents
+@st.cache_data(show_spinner="Extracting text from documents...")
+def load_documents():
+    documents = []
+    folder = "support"
+    for filename in os.listdir(folder):
+        if filename.endswith(".docx"):
+            text = docx2txt.process(os.path.join(folder, filename))
+            documents.append((filename, text.strip()))
+    return documents
 
-# Gera embeddings com OpenAI v1.x
-def gerar_embeddings(textos: List[str]):
+# Generate embeddings using OpenAI v1.x
+def generate_embeddings(texts: List[str]):
     response = client.embeddings.create(
-        input=textos,
+        input=texts,
         model=EMBEDDING_MODEL
     )
     return [r.embedding for r in response.data]
 
-# Cria índice vetorial com FAISS
-@st.cache_resource(show_spinner="Indexando documentos com FAISS...")
-def criar_faiss_index(documentos):
-    trechos = []
-    referencias = []
+# Create FAISS vector index
+@st.cache_resource(show_spinner="Indexing documents with FAISS...")
+def create_faiss_index(documents):
+    passages = []
+    sources = []
 
-    for nome, texto in documentos:
-        for par in texto.split("\n"):
-            par = par.strip()
-            if len(par) > 30:
-                trechos.append(par)
-                referencias.append(nome)
+    for name, text in documents:
+        for paragraph in text.split("\n"):
+            paragraph = paragraph.strip()
+            if len(paragraph) > 30:
+                passages.append(paragraph)
+                sources.append(name)
 
-    embeddings = gerar_embeddings(trechos)
+    embeddings = generate_embeddings(passages)
     index = faiss.IndexFlatL2(len(embeddings[0]))
     index.add(np.array(embeddings).astype("float32"))
 
-    return index, trechos, referencias, embeddings
+    return index, passages, sources, embeddings
 
-# Busca os trechos mais relevantes
-def buscar_contexto(pergunta: str, index, trechos, referencias, k=3) -> List[Tuple[str, str]]:
-    pergunta_emb = gerar_embeddings([pergunta])[0]
-    D, I = index.search(np.array([pergunta_emb]).astype("float32"), k)
-    resultados = []
+# Retrieve the most relevant passages
+def retrieve_context(query: str, index, passages, sources, k=3) -> List[Tuple[str, str]]:
+    query_emb = generate_embeddings([query])[0]
+    D, I = index.search(np.array([query_emb]).astype("float32"), k)
+    results = []
     for idx in I[0]:
-        resultados.append((referencias[idx], trechos[idx]))
-    return resultados
+        results.append((sources[idx], passages[idx]))
+    return results
 
-# Gera resposta com base nos trechos e retorna também o prompt
-def gerar_resposta(pergunta: str, contexto: List[Tuple[str, str]]) -> Tuple[str, str]:
+# Generate answer using the retrieved context and return prompt as well
+def generate_answer(query: str, context: List[Tuple[str, str]]) -> Tuple[str, str]:
     prompt = f"""
-Você é um assistente de atendimento ao cliente. Use as informações abaixo para responder de forma objetiva, amigável e precisa:
+You are a customer support assistant. Use the information below to answer in a clear, friendly, and helpful way.
 
-Contexto:
-{chr(10).join(f'- {c}' for _, c in contexto)}
+Context:
+{chr(10).join(f'- {c}' for _, c in context)}
 
-Pergunta: {pergunta}
+Question: {query}
 
-Resposta:
+Answer:
 """
 
     response = client.chat.completions.create(
@@ -85,53 +85,53 @@ Resposta:
     return response.choices[0].message.content, prompt
 
 # ================================
-#        INTERFACE STREAMLIT
+#         STREAMLIT UI
 # ================================
 
-st.set_page_config(page_title="FAQ com OpenAI + FAISS", layout="centered")
-st.title("🤖 FAQ Inteligente com OpenAI + FAISS")
+st.set_page_config(page_title="FAQ with OpenAI + FAISS", layout="centered")
+st.title("🤖 Smart FAQ with OpenAI + FAISS")
 
-# Inicializa histórico
-if "mensagens" not in st.session_state:
-    st.session_state.mensagens = []
+# Initialize chat history
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-# Carrega e indexa os documentos
-documentos = carregar_textos()
-index, trechos, refs, _ = criar_faiss_index(documentos)
+# Load and index documents
+documents = load_documents()
+index, passages, refs, _ = create_faiss_index(documents)
 
-# Entrada do usuário
-pergunta = st.chat_input("Digite sua pergunta sobre o produto ou serviço:")
+# User input
+query = st.chat_input("Type your question about the product or service:")
 
-# Exibe histórico anterior
-for msg in st.session_state.mensagens:
+# Display chat history
+for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# Processa nova pergunta
-if pergunta:
-    st.chat_message("user").markdown(pergunta)
+# Handle new query
+if query:
+    st.chat_message("user").markdown(query)
 
-    # Recupera contexto
-    contexto = buscar_contexto(pergunta, index, trechos, refs)
+    # Retrieve relevant context
+    context = retrieve_context(query, index, passages, refs)
     
-    # Gera resposta e salva prompt usado
-    resposta, prompt_usado = gerar_resposta(pergunta, contexto)
+    # Generate response and capture prompt
+    answer, used_prompt = generate_answer(query, context)
 
-    # Exibe resposta + fontes + prompt
+    # Show response + sources + prompt
     with st.chat_message("assistant"):
-        st.markdown(resposta)
+        st.markdown(answer)
 
         st.markdown("---")
-        st.markdown("#### 📂 Documentos Recuperados:")
-        for fonte, trecho in contexto:
-            st.markdown(f"- **Arquivo:** `{fonte}`")
-            st.markdown(f"  > {trecho.strip()[:300]}...")
+        st.markdown("#### 📂 Retrieved Documents:")
+        for source, passage in context:
+            st.markdown(f"- **File:** `{source}`")
+            st.markdown(f"  > {passage.strip()[:300]}...")
             st.markdown("")
 
-        st.markdown("#### 🧠 Prompt enviado ao modelo:")
-        with st.expander("Visualizar prompt completo"):
-            st.code(prompt_usado.strip())
+        st.markdown("#### 🧠 Prompt Sent to the Model:")
+        with st.expander("Show full prompt"):
+            st.code(used_prompt.strip())
 
-    # Atualiza histórico
-    st.session_state.mensagens.append({"role": "user", "content": pergunta})
-    st.session_state.mensagens.append({"role": "assistant", "content": resposta})
+    # Update chat history
+    st.session_state.messages.append({"role": "user", "content": query})
+    st.session_state.messages.append({"role": "assistant", "content": answer})
