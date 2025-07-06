@@ -5,31 +5,30 @@ import docx2txt
 import streamlit as st
 import torch
 
-from dotenv import load_dotenv  # <-- adicionado
-load_dotenv()                   # <-- carrega o .env
+from dotenv import load_dotenv  
+load_dotenv()                   
 
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.llms.openai import OpenAI
 from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, Settings
 
 
-
-# Corrige compatibilidade entre Streamlit e PyTorch
+# Fixes compatibility between Streamlit and PyTorch
 torch.classes.__path__ = []
 
-# Configuração da página
+# Page configuration
 st.set_page_config(page_title="FAQ Project", page_icon=":MVP", layout="centered")
 
-# Menu lateral
+# Sidebar menu
 st.sidebar.title("FAQ Project")
 st.sidebar.markdown("### Customer Service")
 st.sidebar.markdown("[thechaincademy](https://www.linkedin.com/company/thechaincademy/posts/?feedView=all)")
 st.sidebar.button("AI Chatbot Version 1.0")
 
-# Título principal
+# Main title
 st.title("Personalized Chatbot with Recommendation System for Customer Support Using LLMs")
 
-# Histórico de mensagens
+# Message history
 if "messages" not in st.session_state:
     st.session_state.messages = [{"role": "assistant", "content": "Enter your question"}]
 
@@ -43,7 +42,7 @@ llm = OpenAI(
 # Embeddings
 embed_model = HuggingFaceEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
-# Banco vetorial
+# Vector database
 @st.cache_resource()
 def dsa_cria_database_externo():
     with st.spinner(text="Loading and indexing documents. This should take a few seconds."):
@@ -56,20 +55,20 @@ def dsa_cria_database_externo():
 
 banco_vetorial = dsa_cria_database_externo()
 
-# Inicializa chat engine
+# Initialize chat engine
 if "chat_engine" not in st.session_state:
     st.session_state.chat_engine = banco_vetorial.as_chat_engine(chat_mode="condense_question", verbose=True)
 
-# Entrada do usuário
+# User input
 if prompt := st.chat_input("Your question"):
     st.session_state.messages.append({"role": "user", "content": prompt})
 
-# Exibição do histórico
+# Chat history display
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.write(message["content"])
 
-# Geração de resposta
+# Generate response
 if st.session_state.messages[-1]["role"] != "assistant":
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
@@ -82,10 +81,10 @@ if st.session_state.messages[-1]["role"] != "assistant":
 
             response = st.session_state.chat_engine.chat(contextual_prompt)
 
-            # Resposta principal
+             # Display main answer
             st.write(response.response)
 
-            # Fontes
+            # Display sources
             if response.source_nodes:
                 st.markdown("#### ⭐️ Source:")
                 for node in response.source_nodes:
