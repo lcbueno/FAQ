@@ -1,84 +1,119 @@
 # project.py
 
 import os
+import faiss
+import numpy as np
 import streamlit as st
-import torch
 import docx2txt
 
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, Settings
-from llama_index.llms.openai import OpenAI  
+from typing import List
+from openai import OpenAI
+from sklearn.metrics.pairwise import cosine_similarity
 
-# Corrige compatibilidade com Streamlit
-torch.classes.__path__ = []
+# Configuração da OpenAI
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+EMBEDDING_MODEL = "text-embedding-ada-002"
+CHAT_MODEL = "gpt-4"
 
-# Configuração da página
-st.set_page_config(page_title="FAQ Chatbot", page_icon="💬", layout="centered")
+# Lê documentos .docx
+@st.cache_data(show_spinner="Extraindo textos dos documentos...")
+def carregar_textos():
+    documentos = []
+    pasta = "support"
+    for arquivo in os.listdir(pasta):
+        if arquivo.endswith(".docx"):
+            texto = docx2txt.process(os.path.join(pasta, arquivo))
+            documentos.append((arquivo, texto.strip()))
+    return documentos
 
-st.sidebar.title("FAQ Chatbot")
-st.sidebar.markdown("Versão com RAG + OpenAI + Streamlit Cloud")
+# Gera embeddings com OpenAI v1.x
+def gerar_embeddings(textos: List[str]):
+    response = client.embeddings.create(
+        input=textos,
+        model=EMBEDDING_MODEL
+    )
+    return [r.embedding for r in response.data]
 
-# Exibição inicial
-st.title("FAQ Inteligente com LLM + RAG")
+# Cria índice vetorial com FAISS
+@st.cache_resource(show_spinner="Indexando documentos com FAISS...")
+def criar_faiss_index(documentos):
+    trechos = []
+    referencias = []
 
-if "messages" not in st.session_state:
-    st.session_state.messages = [{"role": "assistant", "content": "Como posso te ajudar?"}]
+    for nome, texto in documentos:
+        for par in texto.split("\n"):
+            par = par.strip()
+            if len(par) > 30:
+                trechos.append(par)
+                referencias.append(nome)
 
-# OpenAI LLM
-llm = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY"),
-    model="gpt-4",  # ou "gpt-3.5-turbo"
-    temperature=0.7
-)
+    embeddings = gerar_embeddings(trechos)
+    index = faiss.IndexFlatL2(len(embeddings[0]))
+    index.add(np.array(embeddings).astype("float32"))
 
-# Embeddings
-embed_model = HuggingFaceEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    return index, trechos, referencias, embeddings
 
-# Indexador de documentos
-@st.cache_resource()
-def carregar_base_vetorial():
-    with st.spinner("Indexando base de conhecimento..."):
-        reader = SimpleDirectoryReader(input_dir="./support", recursive=True)
-        docs = reader.load_data()
-        Settings.llm = llm
-        Settings.embed_model = embed_model
-        return VectorStoreIndex.from_documents(docs)
+# Busca os trechos mais relevantes
+def buscar_contexto(pergunta: str, index, trechos, referencias, k=3):
+    pergunta_emb = gerar_embeddings([pergunta])[0]
+    D, I = index.search(np.array([pergunta_emb]).astype("float32"), k)
+    resultados = []
+    for idx in I[0]:
+        resultados.append((referencias[idx], trechos[idx]))
+    return resultados
 
-index = carregar_base_vetorial()
+# Gera resposta com base nos trechos
+def gerar_resposta(pergunta: str, contexto: List[str]):
+    prompt = f"""
+Você é um assistente de atendimento ao cliente. Use as informações abaixo para responder de forma objetiva, amigável e precisa:
 
-# Inicializa mecanismo de chat (com condensação de perguntas)
-if "chat_engine" not in st.session_state:
-    st.session_state.chat_engine = index.as_chat_engine(chat_mode="condense_question", verbose=True)
+Contexto:
+{chr(10).join(f'- {c}' for _, c in contexto)}
+
+Pergunta: {pergunta}
+
+Resposta:
+"""
+
+    response = client.chat.completions.create(
+        model=CHAT_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.7,
+        max_tokens=800
+    )
+
+    return response.choices[0].message.content
+
+# ================================
+#        INTERFACE STREAMLIT
+# ================================
+
+st.set_page_config(page_title="FAQ com OpenAI + FAISS", layout="centered")
+st.title("🤖 FAQ Inteligente com OpenAI + FAISS")
+
+# Inicializa histórico
+if "mensagens" not in st.session_state:
+    st.session_state.mensagens = []
+
+# Carrega e indexa os documentos
+documentos = carregar_textos()
+index, trechos, refs, _ = criar_faiss_index(documentos)
 
 # Entrada do usuário
-if prompt := st.chat_input("Sua pergunta:"):
-    st.session_state.messages.append({"role": "user", "content": prompt})
+pergunta = st.chat_input("Digite sua pergunta sobre o produto ou serviço:")
 
-# Exibição do histórico
-for msg in st.session_state.messages:
+# Exibe histórico
+for msg in st.session_state.mensagens:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# Geração de resposta
-if st.session_state.messages[-1]["role"] == "user":
-    with st.chat_message("assistant"):
-        with st.spinner("Buscando resposta..."):
-            user_message = st.session_state.messages[-1]["content"]
-            contextual_prompt = (
-                f"Você é um atendente útil. A pergunta é: '{user_message}'. "
-                "Use os documentos de suporte disponíveis para responder com precisão e clareza."
-            )
+# Processa nova pergunta
+if pergunta:
+    st.chat_message("user").markdown(pergunta)
+    contexto = buscar_contexto(pergunta, index, trechos, refs)
+    resposta = gerar_resposta(pergunta, contexto)
 
-            response = st.session_state.chat_engine.chat(contextual_prompt)
+    st.chat_message("assistant").markdown(resposta)
 
-            st.markdown(response.response)
-
-            # Fontes utilizadas
-            if response.source_nodes:
-                st.markdown("##### 🔎 Fontes:")
-                for node in response.source_nodes:
-                    if 'file_path' in node.metadata:
-                        st.markdown(f"- **Arquivo**: `{node.metadata['file_path']}`")
-                    st.markdown(f" Trecho: `{node.text.strip()[:300]}...`")
-
-            st.session_state.messages.append({"role": "assistant", "content": response.response})
+    st.session_state.mensagens.append({"role": "user", "content": pergunta})
+    st.session_state.mensagens.append({"role": "assistant", "content": resposta})
