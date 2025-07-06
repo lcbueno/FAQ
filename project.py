@@ -6,7 +6,7 @@ import numpy as np
 import streamlit as st
 import docx2txt
 
-from typing import List
+from typing import List, Tuple
 from openai import OpenAI
 from sklearn.metrics.pairwise import cosine_similarity
 
@@ -54,7 +54,7 @@ def criar_faiss_index(documentos):
     return index, trechos, referencias, embeddings
 
 # Busca os trechos mais relevantes
-def buscar_contexto(pergunta: str, index, trechos, referencias, k=3):
+def buscar_contexto(pergunta: str, index, trechos, referencias, k=3) -> List[Tuple[str, str]]:
     pergunta_emb = gerar_embeddings([pergunta])[0]
     D, I = index.search(np.array([pergunta_emb]).astype("float32"), k)
     resultados = []
@@ -62,8 +62,8 @@ def buscar_contexto(pergunta: str, index, trechos, referencias, k=3):
         resultados.append((referencias[idx], trechos[idx]))
     return resultados
 
-# Gera resposta com base nos trechos
-def gerar_resposta(pergunta: str, contexto: List[tuple]):
+# Gera resposta com base nos trechos e retorna também o prompt
+def gerar_resposta(pergunta: str, contexto: List[Tuple[str, str]]) -> Tuple[str, str]:
     prompt = f"""
 Você é um assistente de atendimento ao cliente. Use as informações abaixo para responder de forma objetiva, amigável e precisa:
 
@@ -82,7 +82,7 @@ Resposta:
         max_tokens=800
     )
 
-    return response.choices[0].message.content
+    return response.choices[0].message.content, prompt
 
 # ================================
 #        INTERFACE STREAMLIT
@@ -102,7 +102,7 @@ index, trechos, refs, _ = criar_faiss_index(documentos)
 # Entrada do usuário
 pergunta = st.chat_input("Digite sua pergunta sobre o produto ou serviço:")
 
-# Exibe histórico
+# Exibe histórico anterior
 for msg in st.session_state.mensagens:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
@@ -111,19 +111,27 @@ for msg in st.session_state.mensagens:
 if pergunta:
     st.chat_message("user").markdown(pergunta)
 
+    # Recupera contexto
     contexto = buscar_contexto(pergunta, index, trechos, refs)
-    resposta = gerar_resposta(pergunta, contexto)
+    
+    # Gera resposta e salva prompt usado
+    resposta, prompt_usado = gerar_resposta(pergunta, contexto)
 
-    # Exibe resposta e fontes
+    # Exibe resposta + fontes + prompt
     with st.chat_message("assistant"):
         st.markdown(resposta)
 
-        fontes_usadas = set([fonte for fonte, _ in contexto])
-        if fontes_usadas:
-            st.markdown("**Fontes consultadas:**")
-            for fonte in fontes_usadas:
-                st.markdown(f"- 📄 `{fonte}`")
+        st.markdown("---")
+        st.markdown("#### 📂 Documentos Recuperados:")
+        for fonte, trecho in contexto:
+            st.markdown(f"- **Arquivo:** `{fonte}`")
+            st.markdown(f"  > {trecho.strip()[:300]}...")
+            st.markdown("")
 
-    # Salva no histórico
+        st.markdown("#### 🧠 Prompt enviado ao modelo:")
+        with st.expander("Visualizar prompt completo"):
+            st.code(prompt_usado.strip())
+
+    # Atualiza histórico
     st.session_state.mensagens.append({"role": "user", "content": pergunta})
     st.session_state.mensagens.append({"role": "assistant", "content": resposta})
