@@ -88,8 +88,8 @@ Answer:
 #         STREAMLIT UI
 # ================================
 
-st.set_page_config(page_title="FAQ with OpenAI + FAISS", layout="centered")
-st.title("🤖 Smart FAQ with OpenAI + FAISS")
+st.set_page_config(page_title="FAQ / MVP", layout="centered")
+st.title("FAQ / MVP")
 
 # Initialize chat history
 if "messages" not in st.session_state:
@@ -122,13 +122,13 @@ if query:
         st.markdown(answer)
 
         st.markdown("---")
-        st.markdown("#### 📂 Retrieved Documents:")
+        st.markdown("#### 🗂️ Retrieved Documents:")
         for source, passage in context:
             st.markdown(f"- **File:** `{source}`")
             st.markdown(f"  > {passage.strip()[:300]}...")
             st.markdown("")
 
-        st.markdown("#### 🧠 Prompt Sent to the Model:")
+        st.markdown("#### 🧑‍💻 Prompt Sent to the Model:")
         with st.expander("Show full prompt"):
             st.code(used_prompt.strip())
 
